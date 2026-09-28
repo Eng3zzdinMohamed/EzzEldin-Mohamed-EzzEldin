@@ -769,3 +769,17 @@ footer {
         text-align: left;
     }
 }
+/* ---- CMS-driven sections ---- */
+[hidden] { display: none !important; }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.cms-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; }
+.card-grid .cms-card { margin-bottom: 0; }
+.cms-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
+.cms-card h3, .cms-group h3 { margin: 0 0 6px; }
+.cms-card p { color: var(--muted); margin: 0 0 10px; }
+.cms-meta { font-size: .9rem; }
+.cms-links { display: flex; gap: 14px; flex-wrap: wrap; }
+.cms-links a { color: var(--cyan); font-weight: 600; text-decoration: none; }
+.cms-links a:hover { text-decoration: underline; }
+.cms-group { margin-bottom: 22px; }
+.tool-icon img { width: 100%; height: 100%; object-fit: contain; }

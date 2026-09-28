@@ -53,7 +53,7 @@
         <a href="#education">Education</a>
         <a href="#contact">Contact</a>
       </div>
-      <a class="nav-gh" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
+      <a class="nav-gh" data-social="github" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
         rel="noopener">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path
@@ -74,23 +74,23 @@
 
     <section class="hero wrap" style="border-top:none;">
       <div class="hero-copy">
-        <p class="kicker">Software &amp; AI Engineer · Egypt</p>
-        <h1 class="name">Ezz-Eldin Mohamed</h1>
-        <p class="role">I build full-stack products and applied-AI systems, and I'm three years into a Computers &amp;
+        <p class="kicker" id="heroKicker">Software &amp; AI Engineer · Egypt</p>
+        <h1 class="name" id="heroName">Ezz-Eldin Mohamed</h1>
+        <p class="role" id="heroRole">I build full-stack products and applied-AI systems, and I'm three years into a Computers &amp;
           AI degree.</p>
-        <p class="lede">Curiosity is what drives most of my work — I like picking a new subject apart until I understand
+        <p class="lede" id="heroLede">Curiosity is what drives most of my work — I like picking a new subject apart until I understand
           it, then turning that into software. Helping other people get unstuck on their own problems is the part I
           enjoy most.</p>
         <div class="hero-actions">
-          <a class="btn btn-primary" href="#contact">Get in touch</a>
-          <a class="btn btn-ghost" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
+          <a class="btn btn-primary" id="heroPrimary" href="#contact">Get in touch</a>
+          <a class="btn btn-ghost" id="heroSecondary" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
             rel="noopener">View the code</a>
         </div>
       </div>
       <div class="hero-photo">
         <div class="hero-photo-frame">
           <div class="hero-photo-inner hero-monogram" role="img" aria-label="Portrait initials of Ezz-Eldin Mohamed">
-            <img src="assets/images/ezzeldin.webp" alt="Portrait of Ezz-Eldin Mohamed" width="400" height="400">
+            <img id="heroImg" src="assets/images/ezzeldin.webp" alt="Portrait of Ezz-Eldin Mohamed" width="400" height="400">
           </div>
         </div>
       </div>
@@ -102,18 +102,20 @@
           <div class="section-head" style="margin-bottom:22px;">
             <h2 class="heading">About</h2>
           </div>
+          <div id="aboutBody">
           <p>I'm 21, based in Egypt, and currently in my third year of a Computers &amp; AI degree. Most of what I do
             sits between full-stack engineering and applied AI — building the interface, the backend, and the model
             behind it as one connected thing rather than separate jobs.</p>
           <p>I learn by shipping. When something's unfamiliar, I'd rather build a small working version of it than read
             about it for a week — and I like doing the same for other people, walking through a problem until it makes
             sense.</p>
-          <blockquote class="arabic">
+          </div>
+          <blockquote class="arabic" id="aboutQuote">
             انا احب التعلم عن كل شئ، ومهندس برمجيات الذكاء الاصطناعي، ومساعدة الآخرين هي ميزتي الخاصة، وأقيم في مصر.
             <footer>— in his own words</footer>
           </blockquote>
         </div>
-        <ul class="fact-list">
+        <ul class="fact-list" id="factList">
           <li><span>Name</span><span>Ezz-Eldin Mohamed Ezz-Eldin</span></li>
           <li><span>Age</span><span>21</span></li>
           <li><span>Based in</span><span>Egypt</span></li>
@@ -130,7 +132,7 @@
           <h2 class="heading">What I work on</h2>
           <p class="section-note">The through-line across most of my projects.</p>
         </div>
-        <ul class="tag-flow">
+        <ul class="tag-flow" id="tagFlow">
           <li>Full-stack development</li>
           <li>Applied AI</li>
           <li>Web development</li>
@@ -141,14 +143,22 @@
       </div>
     </section>
 
+    <section id="projects" hidden><div class="wrap"><div class="section-head"><h2 class="heading">Projects</h2></div><div class="card-grid" id="projectList"></div></div></section>
+
+    <section id="skills" hidden><div class="wrap"><div class="section-head"><h2 class="heading">Skills</h2></div><div id="skillList"></div></div></section>
+
+    <section id="experience" hidden><div class="wrap"><div class="section-head"><h2 class="heading">Experience</h2></div><div id="expList"></div></div></section>
+
+    <section id="certificates" hidden><div class="wrap"><div class="section-head"><h2 class="heading">Certificates</h2></div><div class="card-grid" id="certList"></div></div></section>
+
     <section id="toolbox">
       <div class="wrap">
         <div class="section-head">
           <h2 class="heading">Toolbox</h2>
           <p class="section-note">What this site itself runs on.</p>
         </div>
-        <div class="tool-rows">
-          <a class="tool-row" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
+        <div class="tool-rows" id="toolRows">
+          <a class="tool-row" href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" data-icon="github" target="_blank"
             rel="noopener">
             <span class="tool-icon">
               <svg viewBox="0 0 24 24" fill="currentColor">
@@ -162,7 +172,7 @@
             </span>
             <span class="tool-go">Open repo</span>
           </a>
-          <a class="tool-row" href="https://supabase.com" target="_blank" rel="noopener">
+          <a class="tool-row" href="https://supabase.com" data-icon="supabase" target="_blank" rel="noopener">
             <span class="tool-icon">
               <svg viewBox="0 0 109 113" fill="none">
                 <path
@@ -182,7 +192,7 @@
             </span>
             <span class="tool-go">supabase.com</span>
           </a>
-          <a class="tool-row" href="https://vercel.com" target="_blank" rel="noopener">
+          <a class="tool-row" href="https://vercel.com" data-icon="vercel" target="_blank" rel="noopener">
             <span class="tool-icon">
               <svg viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 2 L22 20 H2 Z" />
@@ -203,6 +213,7 @@
         <div class="section-head">
           <h2 class="heading">Education</h2>
         </div>
+        <div id="eduList">
         <div class="edu-card">
           <div class="edu-badge">C&amp;AI</div>
           <div>
@@ -210,6 +221,7 @@
             <p>3rd year — Egypt</p>
             <span class="edu-status">Currently studying</span>
           </div>
+        </div>
         </div>
       </div>
     </section>
@@ -255,7 +267,7 @@
 
   <footer>
     <div class="wrap footer-row">
-      <p>© <span id="year"></span> Ezz-Eldin Mohamed. Building a better tomorrow.</p>
+      <p>© <span id="year"></span> <span id="footerText">Ezz-Eldin Mohamed. Building a better tomorrow.</span></p>
       <div class="footer-links">
         <a href="https://github.com/Eng3zzdinMohamed/EzzEldin-Mohamed-EzzEldin" target="_blank"
           rel="noopener">GitHub</a>
