@@ -46,3 +46,20 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .msg.unread{border-left:3px solid var(--cyan)}
 .msg p{white-space:pre-wrap;margin:6px 0}
 @media(max-width:760px){.shell{grid-template-columns:1fr}.side{position:static;height:auto;display:flex;flex-wrap:wrap;gap:4px}.side h1,.side hr{display:none}.main{padding:16px}}
+
+/* ---------- AI helper ---------- */
+.muted{color:var(--muted)}
+.ai-admin-chat{min-width:0}
+.ai-admin-messages{max-height:520px;overflow:auto;display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
+.ai-admin-message{padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--panel-2)}
+.ai-admin-message.user{border-left:3px solid var(--cyan)}
+.ai-admin-message.model{border-left:3px solid var(--blue)}
+.ai-admin-message b{font-size:.82rem;color:var(--muted)}
+.ai-admin-message p{margin:5px 0 0;white-space:pre-wrap}
+.ai-admin-setting{display:flex;align-items:center;gap:7px;margin:8px 0 3px;font-weight:700}
+.ai-admin-setting input{width:auto}
+.ai-proposal{border-color:var(--cyan)}
+.ai-proposal pre{white-space:pre-wrap;overflow:auto;background:var(--bg);padding:10px;border-radius:8px;color:var(--text);font:inherit;font-size:.86rem}
+.ai-admin-composer{display:grid;grid-template-columns:1fr auto;gap:9px;align-items:end}
+.ai-admin-composer textarea{min-height:80px}
+@media(max-width:760px){.ai-admin-composer{grid-template-columns:1fr}.ai-admin-composer .btn{justify-self:start}}

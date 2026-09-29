@@ -161,6 +161,32 @@ async function buildForm(fields, row, { onSave, back }) {
   return form;
 }
 
+/* ---------- AI admin helper ---------- */
+async function aiRequest(body, retry = true) {
+  const r = await fetch('/api/admin-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+    body: JSON.stringify(body)
+  });
+  if (r.status === 401 && retry) {
+    try { await refresh(); return aiRequest(body, false); } catch { save(null); location.reload(); }
+  }
+  const text = await r.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!r.ok) throw new Error(data?.error || `AI request failed (${r.status})`);
+  return data;
+}
+function actionLabel(action) {
+  if (!action) return 'Change requested';
+  const a = action.args || {};
+  if (action.name === 'create_row') return `Create a ${a.table} row: ${JSON.stringify(a.fields)}`;
+  if (action.name === 'update_row') return `Update ${a.table} (${a.id}): ${JSON.stringify(a.fields)}`;
+  if (action.name === 'delete_row') return `Delete ${a.table} row (${a.id})`;
+  if (action.name === 'update_singleton') return `Update ${a.table}: ${JSON.stringify(a.fields)}`;
+  if (action.name === 'mark_message_read') return `Mark message ${a.id} as ${a.is_read ? 'read' : 'unread'}`;
+  return JSON.stringify(action);
+}
+
 /* ---------- views ---------- */
 const views = {
   async dashboard() {
@@ -240,6 +266,76 @@ const views = {
     return [h('h2', {}, 'Messages'), box];
   },
 
+  async ai() {
+    let rows = [];
+    const box = h('div', { class: 'ai-admin-chat' });
+    const history = [];
+    const status = h('div', { class: 'muted' });
+    const messages = h('div', { class: 'ai-admin-messages' });
+    const input = h('textarea', { rows: 3, placeholder: 'Ask about the CMS, inspect content, or request a change…' });
+    const send = h('button', { class: 'btn', type: 'button' }, 'Send');
+    const auto = h('input', { type: 'checkbox' });
+    const settingLabel = h('label', { class: 'ai-admin-setting' }, auto, ' Allow AI to execute changes without confirmation');
+    const settingNote = h('small', { class: 'muted' }, 'Off = the AI proposes changes and you must click Confirm. On = clearly requested write actions can run immediately.');
+    const settingCard = h('div', { class: 'card' }, h('b', {}, 'AI action mode'), settingLabel, settingNote);
+
+    try {
+      const current = (await rest('admin_settings?id=eq.1&select=ai_auto_execute'))[0];
+      auto.checked = !!current?.ai_auto_execute;
+    } catch (e) { status.className = 'err'; status.textContent = e.message; }
+
+    auto.addEventListener('change', async () => {
+      auto.disabled = true;
+      try {
+        await rest('admin_settings?id=eq.1', { method: 'PATCH', body: { ai_auto_execute: auto.checked }, headers: { Prefer: 'return=minimal' } });
+        status.className = 'ok'; status.textContent = auto.checked ? 'Auto-execute enabled.' : 'Confirmation mode enabled.';
+      } catch (e) { auto.checked = !auto.checked; status.className = 'err'; status.textContent = e.message; }
+      auto.disabled = false;
+    });
+
+    function add(role, text) {
+      const card = h('div', { class: `ai-admin-message ${role}` }, h('b', {}, role === 'user' ? 'You' : 'AI'), h('p', {}, text));
+      messages.appendChild(card); messages.scrollTop = messages.scrollHeight; return card;
+    }
+    function addProposal(action) {
+      if (!action) return;
+      const card = h('div', { class: 'card ai-proposal' }, h('b', {}, 'Proposed change'), h('pre', {}, actionLabel(action)));
+      const controls = h('div', { class: 'bar' });
+      const confirmBtn = h('button', { class: 'btn', type: 'button' }, 'Confirm & apply');
+      const cancelBtn = h('button', { class: 'btn ghost', type: 'button' }, 'Dismiss');
+      confirmBtn.addEventListener('click', async () => {
+        confirmBtn.disabled = true; cancelBtn.disabled = true; status.className = ''; status.textContent = 'Applying…';
+        try {
+          const data = await aiRequest({ confirmedAction: action });
+          add('model', 'Done — the confirmed change was applied.');
+          status.className = 'ok'; status.textContent = 'Change applied successfully.';
+          card.remove();
+        } catch (e) { status.className = 'err'; status.textContent = e.message; confirmBtn.disabled = false; cancelBtn.disabled = false; }
+      });
+      cancelBtn.addEventListener('click', () => card.remove());
+      controls.append(confirmBtn, cancelBtn); card.appendChild(controls); messages.appendChild(card); messages.scrollTop = messages.scrollHeight;
+    }
+
+    async function ask() {
+      const text = input.value.trim(); if (!text || send.disabled) return;
+      input.value = ''; send.disabled = true; input.disabled = true; status.className = ''; status.textContent = 'Thinking…';
+      add('user', text); history.push({ role: 'user', text });
+      try {
+        const data = await aiRequest({ message: text, history: history.slice(-12) });
+        add('model', data.reply || 'No response.');
+        history.push({ role: 'model', text: data.reply || '' });
+        if (data.proposedAction) addProposal(data.proposedAction);
+        if (data.appliedActions?.length) status.textContent = `${data.appliedActions.length} action(s) applied.`;
+        else status.textContent = data.autoExecute ? 'Auto-execute is enabled.' : 'Confirmation mode is enabled.';
+      } catch (e) { add('model', `Error: ${e.message}`); status.className = 'err'; status.textContent = 'Request failed.'; }
+      finally { send.disabled = false; input.disabled = false; input.focus(); }
+    }
+    send.addEventListener('click', ask);
+    input.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') ask(); });
+    add('model', 'I can inspect your CMS data and help manage it. In confirmation mode, I will show a proposed change before anything is written.');
+    return [h('div', { class: 'bar' }, h('div', {}, h('h2', { style: 'margin:0' }, 'AI helper'), h('small', { class: 'muted' }, 'Private admin assistant')), status), settingCard, h('div', { class: 'card' }, messages, h('div', { class: 'ai-admin-composer' }, input, send))];
+  },
+
   async media() {
     let rows = await rest('media?select=*&order=created_at.desc');
     const box = h('div', { class: 'grid' }); const msg = h('div', {});
@@ -256,7 +352,7 @@ const views = {
 /* ---------- shell + router ---------- */
 function nav(active) {
   const link = (href, t) => h('a', { href, class: active === href ? 'on' : '' }, t);
-  return h('nav', { class: 'side' }, h('h1', {}, 'Admin'), link('#/dashboard', 'Dashboard'), link('#/messages', 'Messages'), h('hr'),
+  return h('nav', { class: 'side' }, h('h1', {}, 'Admin'), link('#/dashboard', 'Dashboard'), link('#/messages', 'Messages'), link('#/ai', 'AI helper'), h('hr'),
     link('#/single/site_profile', 'Profile & About'), link('#/single/site_settings', 'Settings & SEO'), h('hr'),
     Object.entries(R).map(([k, v]) => link(`#/list/${k}`, v.label)), h('hr'), link('#/media', 'Media library'),
     h('a', { href: '../', target: '_blank', rel: 'noopener' }, 'View site ↗'),

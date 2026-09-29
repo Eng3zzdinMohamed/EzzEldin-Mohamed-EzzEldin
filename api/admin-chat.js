@@ -1,301 +1,232 @@
-// Admin-only AI helper API. Requires a valid admin Supabase session (verified
-// server-side via requireAdmin). Can read anything the admin can read and,
-// depending on admin_settings.ai_auto_execute, either proposes write actions
-// for the admin to confirm, or applies them immediately — always through the
-// same RLS-protected REST calls the admin panel itself uses (no service key).
+// Admin-only AI helper API.
+// The caller must have a valid Supabase admin session. Writes are either
+// proposed for confirmation or executed immediately according to admin_settings.
 
-import { requireAdmin, rest, callRpc } from './_lib/supabase.js';
-import { generateContent, textFromCandidate, functionCallsFromCandidate } from './_lib/gemini.js';
+import { requireAdmin, rest, callRpc } from './supabase.js';
+import { generateContent, textFromCandidate, functionCallsFromCandidate } from './gemini.js';
 
 export const config = { runtime: 'nodejs' };
 
-// Tables the assistant is allowed to touch, and how to summarize a row for confirmation prompts.
-const WRITABLE_TABLES = {
-  projects: 'title', skills: 'name', skill_categories: 'name', experiences: 'position',
-  education: 'institution', certificates: 'name', focus_tags: 'label', about_facts: 'label',
-  toolbox_items: 'name', social_links: 'label',
+const WRITABLE_FIELDS = {
+  projects: ['title','slug','short_description','full_description','main_image_url','main_image_alt','gallery','technologies','category','github_url','live_url','project_date','project_status','featured','seo_title','seo_description','status','sort_order'],
+  skills: ['name','category_id','icon','level','years_experience','description','status','sort_order'],
+  skill_categories: ['name','description','status','sort_order'],
+  experiences: ['position','company','logo_url','start_date','end_date','is_current','description','responsibilities','technologies','status','sort_order'],
+  education: ['institution','degree','field_of_study','badge_text','start_date','end_date','is_current','description','logo_url','document_url','status','sort_order'],
+  certificates: ['name','issuer','issue_date','expiration_date','credential_id','image_url','image_alt','pdf_url','verification_url','description','featured','status','sort_order'],
+  focus_tags: ['label','status','sort_order'],
+  about_facts: ['label','value','status','sort_order'],
+  toolbox_items: ['name','role','link_label','url','icon_key','icon_url','status','sort_order'],
+  social_links: ['platform','label','handle','url','show_in_nav','status','sort_order'],
+};
+const TITLE_COLUMNS = {
+  projects: 'title', skills: 'name', skill_categories: 'name', experiences: 'position', education: 'institution',
+  certificates: 'name', focus_tags: 'label', about_facts: 'label', toolbox_items: 'name', social_links: 'label',
 };
 const SINGLE_TABLES = ['site_profile', 'site_settings'];
+const SINGLE_FIELDS = {
+  site_profile: ['full_name','professional_title','short_bio','email','phone','location','profile_image_url','profile_image_alt','resume_url','hero_kicker','hero_title','hero_subtitle','hero_description','hero_primary_label','hero_primary_url','hero_secondary_label','hero_secondary_url','show_cv_button','cv_button_label','about_body','about_quote','about_quote_attribution','years_of_experience','show_about_stats'],
+  site_settings: ['site_name','logo_url','favicon_url','contact_email','site_url','seo_title','seo_description','seo_keywords','og_image_url','ga_measurement_id','footer_text','maintenance_mode','maintenance_message'],
+};
+const ID_RE = /^[0-9a-f-]{36}$/i;
+
+function cleanFields(table, fields) {
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('fields must be an object');
+  const allowed = WRITABLE_FIELDS[table] || SINGLE_FIELDS[table];
+  if (!allowed) throw new Error('Unknown table');
+  const out = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (!allowed.includes(key)) throw new Error(`Field "${key}" cannot be changed by the AI helper.`);
+    out[key] = value;
+  }
+  if (!Object.keys(out).length) throw new Error('No fields were supplied.');
+  return out;
+}
 
 const READ_TOOLS = [
-  {
-    name: 'get_dashboard',
-    description: 'Get admin dashboard stats: counts of projects/skills/certificates/experience/education, unread messages, recent updates.',
-    parameters: { type: 'object', properties: {} },
-  },
-  {
-    name: 'list_rows',
-    description: 'List rows from a content table (any status, including drafts), optionally filtered.',
-    parameters: {
-      type: 'object',
-      properties: {
-        table: { type: 'string', enum: Object.keys(WRITABLE_TABLES), description: 'Which table to list.' },
-        search: { type: 'string', description: 'Optional case-insensitive substring to filter the title/name field by.' },
-        limit: { type: 'integer', description: 'Max rows to return, default 20.' },
-      },
-      required: ['table'],
-    },
-  },
-  {
-    name: 'get_row',
-    description: 'Get one full row by id from a content table.',
-    parameters: {
-      type: 'object',
-      properties: { table: { type: 'string', enum: Object.keys(WRITABLE_TABLES) }, id: { type: 'string' } },
-      required: ['table', 'id'],
-    },
-  },
-  {
-    name: 'list_messages',
-    description: 'List contact form messages (id, name, email, excerpt, is_read, created_at).',
-    parameters: { type: 'object', properties: { unread_only: { type: 'boolean' } } },
-  },
+  { name: 'get_dashboard', description: 'Get admin dashboard statistics and recent activity.', parameters: { type: 'object', properties: {} } },
+  { name: 'list_rows', description: 'List rows from a content table, including drafts.', parameters: { type: 'object', properties: { table: { type: 'string', enum: Object.keys(WRITABLE_FIELDS) }, search: { type: 'string' }, limit: { type: 'integer' } }, required: ['table'] } },
+  { name: 'get_row', description: 'Get one row by UUID from a content table.', parameters: { type: 'object', properties: { table: { type: 'string', enum: Object.keys(WRITABLE_FIELDS) }, id: { type: 'string' } }, required: ['table','id'] } },
+  { name: 'list_messages', description: 'List contact messages, including read status.', parameters: { type: 'object', properties: { unread_only: { type: 'boolean' } } } },
 ];
-
 const WRITE_TOOLS = [
-  {
-    name: 'create_row',
-    description: 'Create a new row in a content table. Fields must match that table\'s columns. New rows default to draft unless a status is given.',
-    parameters: {
-      type: 'object',
-      properties: {
-        table: { type: 'string', enum: Object.keys(WRITABLE_TABLES) },
-        fields: { type: 'object', description: 'Column values for the new row.' },
-      },
-      required: ['table', 'fields'],
-    },
-  },
-  {
-    name: 'update_row',
-    description: 'Update specific fields of an existing row by id (partial update).',
-    parameters: {
-      type: 'object',
-      properties: {
-        table: { type: 'string', enum: Object.keys(WRITABLE_TABLES) },
-        id: { type: 'string' },
-        fields: { type: 'object', description: 'Only the columns to change.' },
-      },
-      required: ['table', 'id', 'fields'],
-    },
-  },
-  {
-    name: 'delete_row',
-    description: 'Delete a row by id. Irreversible — only call after the admin has clearly confirmed which row.',
-    parameters: {
-      type: 'object',
-      properties: { table: { type: 'string', enum: Object.keys(WRITABLE_TABLES) }, id: { type: 'string' } },
-      required: ['table', 'id'],
-    },
-  },
-  {
-    name: 'update_singleton',
-    description: "Update fields on site_profile (name/bio/hero/about) or site_settings (SEO/site name/etc).",
-    parameters: {
-      type: 'object',
-      properties: { table: { type: 'string', enum: SINGLE_TABLES }, fields: { type: 'object' } },
-      required: ['table', 'fields'],
-    },
-  },
-  {
-    name: 'mark_message_read',
-    description: 'Mark a contact message as read or unread.',
-    parameters: { type: 'object', properties: { id: { type: 'string' }, is_read: { type: 'boolean' } }, required: ['id', 'is_read'] },
-  },
+  { name: 'create_row', description: 'Create a row in a content table. Use draft status unless the admin explicitly requests another status.', parameters: { type: 'object', properties: { table: { type: 'string', enum: Object.keys(WRITABLE_FIELDS) }, fields: { type: 'object' } }, required: ['table','fields'] } },
+  { name: 'update_row', description: 'Update selected fields of an existing content row by UUID.', parameters: { type: 'object', properties: { table: { type: 'string', enum: Object.keys(WRITABLE_FIELDS) }, id: { type: 'string' }, fields: { type: 'object' } }, required: ['table','id','fields'] } },
+  { name: 'delete_row', description: 'Delete an existing content row by UUID. Only use when the admin clearly requests deletion.', parameters: { type: 'object', properties: { table: { type: 'string', enum: Object.keys(WRITABLE_FIELDS) }, id: { type: 'string' } }, required: ['table','id'] } },
+  { name: 'update_singleton', description: 'Update site_profile or site_settings fields.', parameters: { type: 'object', properties: { table: { type: 'string', enum: SINGLE_TABLES }, fields: { type: 'object' } }, required: ['table','fields'] } },
+  { name: 'mark_message_read', description: 'Mark a contact message read or unread.', parameters: { type: 'object', properties: { id: { type: 'string' }, is_read: { type: 'boolean' } }, required: ['id','is_read'] } },
 ];
 
-const SYSTEM_INSTRUCTION = (autoExecute) => `You are the admin's AI helper for the backend of Ezz-Eldin's portfolio site. You can read any content (including drafts) and, when asked, perform create/update/delete actions on the portfolio database.
-
-Rules:
-- Always use tools to read real data before answering factual questions — never guess ids or current values.
-- For write actions (create_row, update_row, delete_row, update_singleton, mark_message_read): ${autoExecute
-  ? 'the admin has enabled auto-execute, so you may call these tools directly. Still summarize what you changed afterward.'
-  : 'you are in PROPOSE-ONLY mode. Do NOT call these tools yourself. Instead, respond with a clear, concrete natural-language description of the exact change you would make (table, id if updating, and the field values), and tell the admin to confirm it in the UI to apply it.'}
-- Be concise and precise about ids, table names, and field values you use or propose.
-- Never invent an id — always look it up first with list_rows or get_row.
-- Delete actions are irreversible; be extra clear about what will be deleted.`;
+const SYSTEM = (auto) => `You are the private admin AI helper for Ezz-Eldin's portfolio CMS.
+You can inspect the admin-visible database, including drafts, and can make database changes through the supplied tools.
+Never invent IDs. Read the relevant row first when an ID is not already known.
+Never expose secrets, access tokens, or environment variables.
+${auto ? 'Auto-execute is enabled: when the admin clearly requests a write, you may execute it and then summarize exactly what changed.' : 'Confirmation mode is enabled: do not execute writes. Describe the exact proposed change and wait for the UI confirmation.'}
+Be concise and precise. If a requested action is ambiguous or unsafe, ask for clarification instead of guessing.`;
 
 async function callReadTool(name, args) {
   switch (name) {
-    case 'get_dashboard':
-      return callRpc('admin_dashboard', {}, args.accessToken);
+    case 'get_dashboard': return callRpc('admin_dashboard', {}, args.accessToken);
     case 'list_rows': {
       const table = args.table;
-      if (!WRITABLE_TABLES[table]) throw new Error('Unknown table');
-      const titleCol = WRITABLE_TABLES[table];
-      let q = `${table}?select=*&order=sort_order.asc&limit=${Math.min(args.limit || 20, 50)}`;
-      if (args.search) q += `&${titleCol}=ilike.*${encodeURIComponent(args.search)}*`;
+      if (!WRITABLE_FIELDS[table]) throw new Error('Unknown table');
+      const limit = Math.max(1, Math.min(Number(args.limit) || 20, 50));
+      let q = `${table}?select=*&order=sort_order.asc,created_at.asc&limit=${limit}`;
+      if (args.search) q += `&${TITLE_COLUMNS[table]}=ilike.*${encodeURIComponent(String(args.search).slice(0, 100))}*`;
       return rest(q, {}, args.accessToken);
     }
     case 'get_row':
-      if (!WRITABLE_TABLES[args.table]) throw new Error('Unknown table');
+      if (!WRITABLE_FIELDS[args.table] || !ID_RE.test(String(args.id || ''))) throw new Error('Invalid table or row id');
       return rest(`${args.table}?id=eq.${args.id}&select=*`, {}, args.accessToken);
     case 'list_messages': {
       let q = 'contact_messages?select=id,name,email,message,is_read,created_at&order=created_at.desc&limit=20';
       if (args.unread_only) q += '&is_read=eq.false';
       return rest(q, {}, args.accessToken);
     }
-    default:
-      throw new Error(`Unknown read tool: ${name}`);
+    default: throw new Error(`Unknown read tool: ${name}`);
   }
 }
 
 async function applyWriteTool(name, args, admin) {
-  const log = async (action, target_table, target_id, payload, result, error_message) => {
+  const log = async (action, targetTable, targetId, payload, result, errorMessage = null) => {
     try {
-      await rest('ai_action_log', {
-        method: 'POST',
-        body: { admin_email: admin.email, action, target_table, target_id: target_id || null, payload, result, error_message },
-        headers: { Prefer: 'return=minimal' },
-      }, admin.accessToken);
-    } catch { /* logging failure should never block the actual response */ }
+      await rest('ai_action_log', { method: 'POST', body: { admin_email: admin.email, action, target_table: targetTable || null, target_id: targetId || null, payload: payload || null, result, error_message: errorMessage }, headers: { Prefer: 'return=minimal' } }, admin.accessToken);
+    } catch (e) { console.error('AI action log failed:', e.message); }
   };
 
   try {
     let result;
-    switch (name) {
-      case 'create_row': {
-        if (!WRITABLE_TABLES[args.table]) throw new Error('Unknown table');
-        const top = await rest(`${args.table}?select=sort_order&order=sort_order.desc&limit=1`, {}, admin.accessToken);
-        const body = { ...args.fields, sort_order: (top[0] ? top[0].sort_order : 0) + 10 };
-        result = await rest(args.table, { method: 'POST', body, headers: { Prefer: 'return=representation' } }, admin.accessToken);
-        await log('create_row', args.table, result && result[0] && result[0].id, args.fields, 'applied');
-        break;
-      }
-      case 'update_row': {
-        if (!WRITABLE_TABLES[args.table]) throw new Error('Unknown table');
-        result = await rest(`${args.table}?id=eq.${args.id}`, { method: 'PATCH', body: args.fields, headers: { Prefer: 'return=representation' } }, admin.accessToken);
-        await log('update_row', args.table, args.id, args.fields, 'applied');
-        break;
-      }
-      case 'delete_row': {
-        if (!WRITABLE_TABLES[args.table]) throw new Error('Unknown table');
-        await rest(`${args.table}?id=eq.${args.id}`, { method: 'DELETE' }, admin.accessToken);
-        result = { deleted: true };
-        await log('delete_row', args.table, args.id, null, 'applied');
-        break;
-      }
-      case 'update_singleton': {
-        if (!SINGLE_TABLES.includes(args.table)) throw new Error('Unknown table');
-        result = await rest(`${args.table}?id=eq.1`, { method: 'PATCH', body: args.fields, headers: { Prefer: 'return=representation' } }, admin.accessToken);
-        await log('update_singleton', args.table, null, args.fields, 'applied');
-        break;
-      }
-      case 'mark_message_read': {
-        result = await rest(`contact_messages?id=eq.${args.id}`, { method: 'PATCH', body: { is_read: args.is_read }, headers: { Prefer: 'return=representation' } }, admin.accessToken);
-        await log('mark_message_read', 'contact_messages', args.id, { is_read: args.is_read }, 'applied');
-        break;
-      }
-      default:
-        throw new Error(`Unknown write tool: ${name}`);
-    }
+    if (name === 'create_row') {
+      if (!WRITABLE_FIELDS[args.table]) throw new Error('Unknown table');
+      const fields = cleanFields(args.table, args.fields);
+      if (!('status' in fields)) fields.status = 'draft';
+      const top = await rest(`${args.table}?select=sort_order&order=sort_order.desc&limit=1`, {}, admin.accessToken);
+      if (!('sort_order' in fields)) fields.sort_order = (top[0]?.sort_order || 0) + 10;
+      result = await rest(args.table, { method: 'POST', body: fields, headers: { Prefer: 'return=representation' } }, admin.accessToken);
+      await log('create_row', args.table, result?.[0]?.id, fields, 'applied');
+    } else if (name === 'update_row') {
+      if (!WRITABLE_FIELDS[args.table] || !ID_RE.test(String(args.id || ''))) throw new Error('Invalid table or row id');
+      const fields = cleanFields(args.table, args.fields);
+      result = await rest(`${args.table}?id=eq.${args.id}`, { method: 'PATCH', body: fields, headers: { Prefer: 'return=representation' } }, admin.accessToken);
+      await log('update_row', args.table, args.id, fields, 'applied');
+    } else if (name === 'delete_row') {
+      if (!WRITABLE_FIELDS[args.table] || !ID_RE.test(String(args.id || ''))) throw new Error('Invalid table or row id');
+      result = await rest(`${args.table}?id=eq.${args.id}`, { method: 'DELETE', headers: { Prefer: 'return=minimal' } }, admin.accessToken);
+      await log('delete_row', args.table, args.id, null, 'applied');
+      result = { deleted: true };
+    } else if (name === 'update_singleton') {
+      if (!SINGLE_TABLES.includes(args.table)) throw new Error('Unknown singleton table');
+      const fields = cleanFields(args.table, args.fields);
+      result = await rest(`${args.table}?id=eq.1`, { method: 'PATCH', body: fields, headers: { Prefer: 'return=representation' } }, admin.accessToken);
+      await log('update_singleton', args.table, null, fields, 'applied');
+    } else if (name === 'mark_message_read') {
+      if (!ID_RE.test(String(args.id || '')) || typeof args.is_read !== 'boolean') throw new Error('Invalid message id or read state');
+      result = await rest(`contact_messages?id=eq.${args.id}`, { method: 'PATCH', body: { is_read: args.is_read }, headers: { Prefer: 'return=representation' } }, admin.accessToken);
+      await log('mark_message_read', 'contact_messages', args.id, { is_read: args.is_read }, 'applied');
+    } else throw new Error(`Unknown write tool: ${name}`);
     return result;
   } catch (e) {
-    await log(name, args.table || 'contact_messages', args.id, args.fields, 'failed', e.message);
+    await log(name, args?.table || 'contact_messages', args?.id || null, args?.fields || null, 'failed', e.message);
     throw e;
   }
 }
 
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed' });
-    return;
+async function makeProposal(message, history, admin) {
+  const contents = [];
+  if (Array.isArray(history)) {
+    for (const turn of history.slice(-10)) {
+      if (turn && typeof turn.text === 'string') contents.push({ role: turn.role === 'model' ? 'model' : 'user', parts: [{ text: turn.text.slice(0, 4000) }] });
+    }
   }
+  contents.push({ role: 'user', parts: [{ text: message }] });
+  let candidate = await generateContent({
+    contents,
+    systemInstruction: 'Determine whether the admin request requires a database write. If it does, use read tools as needed to identify the exact target, then make exactly one write tool call as a PROPOSAL. Never execute a write in this turn. If no write is requested, return no tool call.',
+    tools: [...READ_TOOLS, ...WRITE_TOOLS],
+  });
+  let proposal = null;
+  for (let round = 0; round < 4 && !proposal; round++) {
+    const calls = functionCallsFromCandidate(candidate);
+    if (!calls.length) break;
+    contents.push(candidate.content);
+    const responseParts = [];
+    for (const call of calls) {
+      if (WRITE_TOOLS.some((t) => t.name === call.name)) {
+        proposal = { name: call.name, args: call.args || {} };
+        responseParts.push({ functionResponse: { id: call.id, name: call.name, response: { result: { proposed: true } } } });
+      } else {
+        let result;
+        try { result = await callReadTool(call.name, { ...(call.args || {}), accessToken: admin.accessToken }); }
+        catch (e) { result = { error: e.message }; }
+        responseParts.push({ functionResponse: { id: call.id, name: call.name, response: { result } } });
+      }
+    }
+    if (!proposal) {
+      contents.push({ role: 'user', parts: responseParts });
+      candidate = await generateContent({ contents, systemInstruction: 'Use the read results to identify the exact requested change. If a write is clearly requested, call exactly one matching write tool as a proposal; never execute it.', tools: [...READ_TOOLS, ...WRITE_TOOLS] });
+    }
+  }
+  if (proposal) {
+    // Validate before showing a confirmation button. This never writes anything.
+    if (['create_row','update_row'].includes(proposal.name)) proposal.args.fields = cleanFields(proposal.args.table, proposal.args.fields);
+    if (proposal.name === 'update_singleton') proposal.args.fields = cleanFields(proposal.args.table, proposal.args.fields);
+    if (['update_row','delete_row'].includes(proposal.name) && !ID_RE.test(String(proposal.args.id || ''))) throw new Error('The AI could not identify a valid row ID.');
+    if (proposal.name === 'mark_message_read' && (!ID_RE.test(String(proposal.args.id || '')) || typeof proposal.args.is_read !== 'boolean')) throw new Error('The AI could not identify a valid message or read state.');
+  }
+  return proposal;
+}
 
+export default async function handler(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   let admin;
-  try {
-    admin = await requireAdmin(req);
-  } catch (e) {
-    res.status(e.statusCode || 401).json({ error: e.message });
-    return;
-  }
+  try { admin = await requireAdmin(req); }
+  catch (e) { return res.status(e.statusCode || 401).json({ error: e.message }); }
 
   try {
     const { message, history, confirmedAction } = req.body || {};
-
-    // Path 1: admin clicked "Confirm" on a previously-proposed action.
-    if (confirmedAction && confirmedAction.name) {
+    if (confirmedAction?.name) {
+      if (!WRITE_TOOLS.some((t) => t.name === confirmedAction.name)) return res.status(400).json({ error: 'Invalid action.' });
       const result = await applyWriteTool(confirmedAction.name, confirmedAction.args || {}, admin);
-      res.status(200).json({ applied: true, result });
-      return;
+      return res.status(200).json({ applied: true, result, action: confirmedAction });
     }
+    if (typeof message !== 'string' || !message.trim()) return res.status(400).json({ error: 'A message is required.' });
+    if (message.length > 4000) return res.status(400).json({ error: 'Message is too long.' });
 
-    if (!message || typeof message !== 'string' || !message.trim()) {
-      res.status(400).json({ error: 'A message is required.' });
-      return;
-    }
-    if (message.length > 4000) {
-      res.status(400).json({ error: 'Message is too long.' });
-      return;
-    }
-
-    const settingsRow = (await rest('admin_settings?id=eq.1&select=ai_auto_execute', {}, admin.accessToken))[0];
-    const autoExecute = !!(settingsRow && settingsRow.ai_auto_execute);
+    const settings = (await rest('admin_settings?id=eq.1&select=ai_auto_execute', {}, admin.accessToken))[0];
+    const autoExecute = !!settings?.ai_auto_execute;
     const tools = autoExecute ? [...READ_TOOLS, ...WRITE_TOOLS] : READ_TOOLS;
-
     const contents = [];
-    if (Array.isArray(history)) {
-      for (const turn of history.slice(-12)) {
-        if (!turn || typeof turn.text !== 'string') continue;
-        contents.push({ role: turn.role === 'model' ? 'model' : 'user', parts: [{ text: turn.text }] });
-      }
+    if (Array.isArray(history)) for (const turn of history.slice(-12)) {
+      if (turn && typeof turn.text === 'string') contents.push({ role: turn.role === 'model' ? 'model' : 'user', parts: [{ text: turn.text.slice(0, 4000) }] });
     }
-    contents.push({ role: 'user', parts: [{ text: message }] });
+    contents.push({ role: 'user', parts: [{ text: message.trim() }] });
 
-    const systemInstruction = SYSTEM_INSTRUCTION(autoExecute);
-    let candidate = await generateContent({ contents, systemInstruction, tools });
-    let appliedActions = [];
-
-    for (let i = 0; i < 4; i++) {
+    let candidate = await generateContent({ contents, systemInstruction: SYSTEM(autoExecute), tools });
+    const appliedActions = [];
+    for (let round = 0; round < 4; round++) {
       const calls = functionCallsFromCandidate(candidate);
       if (!calls.length) break;
-
       contents.push(candidate.content);
       const responseParts = [];
       for (const call of calls) {
-        let toolResult;
+        let result;
         try {
-          if (WRITE_TOOLS.some((t) => t.name === call.name)) {
-            // Only reachable when autoExecute is true (write tools aren't offered otherwise).
-            toolResult = await applyWriteTool(call.name, call.args || {}, admin);
-            appliedActions.push({ name: call.name, args: call.args });
-          } else {
-            toolResult = await callReadTool(call.name, { ...(call.args || {}), accessToken: admin.accessToken });
-          }
-        } catch (e) {
-          toolResult = { error: e.message };
-        }
-        responseParts.push({ functionResponse: { name: call.name, response: { result: toolResult } } });
+          if (WRITE_TOOLS.some((t) => t.name === call.name) && autoExecute) {
+            result = await applyWriteTool(call.name, call.args || {}, admin);
+            appliedActions.push({ name: call.name, args: call.args || {} });
+          } else result = await callReadTool(call.name, { ...(call.args || {}), accessToken: admin.accessToken });
+        } catch (e) { result = { error: e.message }; }
+        responseParts.push({ functionResponse: { id: call.id, name: call.name, response: { result } } });
       }
       contents.push({ role: 'user', parts: responseParts });
-      candidate = await generateContent({ contents, systemInstruction, tools });
+      candidate = await generateContent({ contents, systemInstruction: SYSTEM(autoExecute), tools });
     }
 
-    const text = textFromCandidate(candidate) || "I couldn't come up with a response.";
-
-    // If not auto-executing, try to detect a clear proposed write in the model's
-    // own text isn't reliable — instead we ask the model, on the *next* turn if
-    // the admin wants to apply it, to re-state it as a structured tool call by
-    // temporarily allowing write tools in "dry run" mode. Simpler and more robust:
-    // when not auto-executing, re-run this exact turn once with write tools
-    // enabled but intercepted, to get a structured proposal instead of prose.
     let proposedAction = null;
-    if (!autoExecute) {
-      const proposalContents = [...contents.slice(0, -1)]; // drop the final tool-response round if any; reuse original request
-      // Simplest reliable approach: ask again with write tools visible, but treat
-      // any resulting function call as a PROPOSAL only (never executed here).
-      const proposalCandidate = await generateContent({
-        contents: [{ role: 'user', parts: [{ text: message }] }],
-        systemInstruction: 'You are the same admin assistant, but for THIS turn only: if the admin\'s message describes a write action (create/update/delete a row, or update a singleton, or mark a message read/unread), call the single matching tool with your best-filled arguments based on the conversation so far. Do not call read tools here. If no write action is being requested, do not call any tool.',
-        tools: [...READ_TOOLS, ...WRITE_TOOLS],
-      });
-      const proposalCalls = functionCallsFromCandidate(proposalCandidate);
-      const writeCall = proposalCalls.find((c) => WRITE_TOOLS.some((t) => t.name === c.name));
-      if (writeCall) proposedAction = { name: writeCall.name, args: writeCall.args || {} };
-    }
-
-    res.status(200).json({ reply: text, appliedActions, proposedAction, autoExecute });
+    if (!autoExecute) proposedAction = await makeProposal(message.trim(), history, admin);
+    return res.status(200).json({ reply: textFromCandidate(candidate) || "I couldn't come up with a response.", appliedActions, proposedAction, autoExecute });
   } catch (e) {
     console.error('admin-chat api error:', e);
-    res.status(500).json({ error: e.message || 'Something went wrong.' });
+    return res.status(500).json({ error: e.message || 'Something went wrong.' });
   }
 }

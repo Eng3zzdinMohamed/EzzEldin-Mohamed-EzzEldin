@@ -112,7 +112,7 @@
           </div>
           <blockquote class="arabic" id="aboutQuote">
             انا احب التعلم عن كل شئ، ومهندس برمجيات الذكاء الاصطناعي، ومساعدة الآخرين هي ميزتي الخاصة، وأقيم في مصر.
-            <footer>— in his own words</footer>
+  <footer>— in his own words</footer>
           </blockquote>
         </div>
         <ul class="fact-list" id="factList">
@@ -265,6 +265,23 @@
 
   </main>
 
+  <aside id="aiChat" class="ai-chat" aria-label="Ezz-Eldin AI assistant">
+    <button id="aiChatLauncher" class="ai-chat-launcher" type="button" aria-expanded="false" aria-controls="aiChatPanel">
+      <span class="ai-chat-launcher-icon" aria-hidden="true">✦</span><span>Ask about Ezz-Eldin</span>
+    </button>
+    <section id="aiChatPanel" class="ai-chat-panel" hidden>
+      <header class="ai-chat-header">
+        <div><strong>Ezz-Eldin AI</strong><small>Ask about his work, skills, projects, or contact info.</small></div>
+        <button id="aiChatClose" class="ai-chat-close" type="button" aria-label="Close assistant">×</button>
+      </header>
+      <div id="aiChatMessages" class="ai-chat-messages" aria-live="polite"></div>
+      <form id="aiChatForm" class="ai-chat-form">
+        <input id="aiChatInput" type="text" maxlength="2000" autocomplete="off" placeholder="Ask me something…" aria-label="Message the AI assistant" required>
+        <button id="aiChatSend" class="btn btn-primary" type="submit">Send</button>
+      </form>
+    </section>
+  </aside>
+
   <footer>
     <div class="wrap footer-row">
       <p>© <span id="year"></span> <span id="footerText">Ezz-Eldin Mohamed. Building a better tomorrow.</span></p>
@@ -277,6 +294,7 @@
   </footer>
 
   <script src="js/main.js"></script>
+  <script src="js/chat.js"></script>
 </body>
 
 </html>
